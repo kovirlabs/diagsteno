@@ -1,0 +1,11 @@
+[package]
+name = "diagsteno"
+description = "Diagnostic Stenographer: strain gauge and accelerometer signal processing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
