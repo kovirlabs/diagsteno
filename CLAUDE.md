@@ -7,8 +7,8 @@ and accelerometer data. Ingest, FFT and band features on the GPU through
 
 Read `../paralanes/docs/PLAN.md` and `../paralanes/docs/SPEC.md` before any
 change. The plan sets milestone order and which machine does what. The spec is
-the technical source of truth; its `cf-` crate names are placeholders, mapped
-to this repo's crates in the table below. Where plan and spec disagree, the
+the technical source of truth and uses the real crate names; the earlier
+`cf-` placeholder names appear in the table below for reference. Where plan and spec disagree, the
 plan is current; note the conflict in your status file.
 
 > DRAFT. Items marked TBD are open decisions for Evan.
@@ -87,6 +87,9 @@ you were given is not assigned to your machine in
   with a CPU reference, not here. Do not redefine the op format.
 - **Features equal the CPU reference.** A replayed dataset produces the same
   features on GPU and CPU.
+- **Durability does not depend on a GPU (R8).** A record is acknowledged only
+  after `diagsteno-store` has flushed it; a kill-and-restart test loses no
+  acknowledged record.
 - **No dropped samples.** Ingest holds the target channel count and sample
   rate, and reports any drop.
 - **Not a database.** Position and build it as an edge ingest and feature
