@@ -1,0 +1,20 @@
+[package]
+name = "socket-locality"
+description = "Experiment: does keeping a stage's memory on its own socket speed up diagsteno on the Dell?"
+version = "0.0.0"
+edition = "2024"
+license = "GPL-3.0-only"
+publish = false
+
+# Standalone: not part of the diagsteno workspace or its CI.
+[workspace]
+
+[dependencies]
+diagsteno = { path = "../../crates/diagsteno" }
+stagelanes-arch = { path = "../../../stagelanes/crates/stagelanes-arch" }
+stagelanes-mem = { path = "../../../stagelanes/crates/stagelanes-mem" }
+bytelanes = { path = "../../../bytelanes/crates/bytelanes" }
+serde_json = "1.0.154"
+
+[profile.release]
+debug = false
