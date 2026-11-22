@@ -8,7 +8,14 @@
 //!    missing frames and samples from each channel's sequence numbers,
 //! 2. stores the batch durably ([`Store::put_samples`]),
 //! 3. acknowledges, per channel, the highest sequence number now durable,
-//! 4. cuts windows and stores their features.
+//! 4. hands the frames to a feature thread, which cuts windows and stores
+//!    their features through its own writer on the features table.
+//!
+//! Storage `fsync` latency is the slow step on some disks, so the queue
+//! between reader and writer is large (about 20 s of the default layout):
+//! while a flush waits on the disk, the reader keeps draining TCP and the
+//! sender is not pushed back; only acknowledgements wait. Features run on
+//! their own thread so they never delay a sample batch's acknowledgement.
 //!
 //! A frame is acknowledged only after step 2 returns (R8). On start the
 //! store is read to recover each channel's last durable sequence number, so
@@ -19,6 +26,8 @@ use std::io::{self, BufReader, BufWriter, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use bytelanes::cpu::CpuBackend;
@@ -46,13 +55,14 @@ pub struct IngestConfig {
 }
 
 impl IngestConfig {
-    /// Defaults: 100 ms batches, an 8,192-frame queue.
+    /// Defaults: 100 ms batches and a 131,072-frame queue (about 20 s of
+    /// the default 64-channel layout at 100 frames per channel per second).
     pub fn new(store: impl Into<PathBuf>, layout: Vec<ChannelSpec>) -> Self {
         IngestConfig {
             store: store.into(),
             layout,
             batch: Duration::from_millis(100),
-            queue: 8192,
+            queue: 131_072,
         }
     }
 }
@@ -78,6 +88,14 @@ pub struct Stats {
     pub window_gaps: u64,
     /// Batches stored.
     pub batches: u64,
+    /// Time spent storing samples, in milliseconds.
+    pub put_samples_ms: u64,
+    /// Time spent computing features, in milliseconds.
+    pub features_ms: u64,
+    /// Time spent storing features, in milliseconds.
+    pub put_features_ms: u64,
+    /// Slowest single batch flush, in milliseconds.
+    pub max_flush_ms: u64,
 }
 
 /// An ingest endpoint bound to one store.
@@ -87,9 +105,72 @@ pub struct Ingest {
     specs: HashMap<u16, ChannelSpec>,
     /// Per channel: next expected sequence number and its first sample.
     next: HashMap<u16, (u64, u64)>,
-    windower: Windower,
-    engine: Engine<CpuBackend>,
     stats: Stats,
+    features: Option<FeatureWorker>,
+}
+
+#[derive(Default)]
+struct FeatureState {
+    rows: u64,
+    gaps: u64,
+    compute_ms: u64,
+    put_ms: u64,
+    error: Option<String>,
+}
+
+/// Lock the feature counters; a poisoned lock still holds plain counters.
+fn lock(st: &Mutex<FeatureState>) -> std::sync::MutexGuard<'_, FeatureState> {
+    match st.lock() {
+        Ok(g) => g,
+        Err(e) => e.into_inner(),
+    }
+}
+
+struct FeatureWorker {
+    tx: mpsc::Sender<Vec<Frame>>,
+    state: Arc<Mutex<FeatureState>>,
+    thread: JoinHandle<()>,
+}
+
+impl FeatureWorker {
+    fn start(layout: &[ChannelSpec], mut store: Store) -> FeatureWorker {
+        let (tx, rx) = mpsc::channel::<Vec<Frame>>();
+        let state = Arc::new(Mutex::new(FeatureState::default()));
+        let st = Arc::clone(&state);
+        let mut windower = Windower::new(layout);
+        let mut engine = Engine::new(CpuBackend::new());
+        let thread = std::thread::spawn(move || {
+            for frames in rx {
+                let windows: Vec<_> = frames.iter().flat_map(|f| windower.push(f)).collect();
+                lock(&st).gaps = windower.gaps();
+                if windows.is_empty() {
+                    continue;
+                }
+                let t = Instant::now();
+                let rows = match engine.compute(&windows) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        lock(&st).error = Some(e.to_string());
+                        return;
+                    }
+                };
+                let compute_ms = t.elapsed().as_millis() as u64;
+                let t = Instant::now();
+                let put = store.put_features(&rows);
+                let mut g = lock(&st);
+                g.compute_ms += compute_ms;
+                g.put_ms += t.elapsed().as_millis() as u64;
+                match put {
+                    Ok(()) => g.rows += rows.len() as u64,
+                    Err(e) => {
+                        g.error = Some(e.to_string());
+                        return;
+                    }
+                }
+            }
+        });
+        FeatureWorker { tx, state, thread }
+    }
 }
 
 impl Ingest {
@@ -104,24 +185,60 @@ impl Ingest {
                 *e = after;
             }
         }
+        let features = Some(FeatureWorker::start(&cfg.layout, store.table_writer()));
         Ok(Ingest {
             specs: cfg.layout.iter().map(|c| (c.id, *c)).collect(),
-            windower: Windower::new(&cfg.layout),
-            engine: Engine::new(CpuBackend::new()),
             cfg,
             store,
             next,
             stats: Stats::default(),
+            features,
         })
     }
 
-    /// Counters so far.
-    pub fn stats(&self) -> &Stats {
-        &self.stats
+    /// Counters so far (feature counters may lag behind the samples).
+    pub fn stats(&self) -> Stats {
+        let mut s = self.stats.clone();
+        if let Some(w) = &self.features {
+            let g = lock(&w.state);
+            s.feature_rows = g.rows;
+            s.window_gaps = g.gaps;
+            s.features_ms = g.compute_ms;
+            s.put_features_ms = g.put_ms;
+        }
+        s
+    }
+
+    /// Wait for all pending features to be stored and return the final
+    /// counters.
+    pub fn close(mut self) -> Result<Stats, Error> {
+        let stats = self.finish_features()?;
+        Ok(stats)
+    }
+
+    fn finish_features(&mut self) -> Result<Stats, Error> {
+        let Some(w) = self.features.take() else {
+            return Ok(self.stats.clone());
+        };
+        drop(w.tx);
+        w.thread
+            .join()
+            .map_err(|_| Error::from("feature thread panicked"))?;
+        let g = lock(&w.state);
+        if let Some(e) = &g.error {
+            return Err(format!("features: {e}").into());
+        }
+        let mut s = self.stats.clone();
+        s.feature_rows = g.rows;
+        s.window_gaps = g.gaps;
+        s.features_ms = g.compute_ms;
+        s.put_features_ms = g.put_ms;
+        Ok(s)
     }
 
     /// Accept and serve `connections` connections in turn (or forever if
-    /// `None`), then return the counters.
+    /// `None`), then return the counters so far. Call [`Ingest::close`] to
+    /// wait for the last features.
     pub fn serve(
         &mut self,
         listener: &TcpListener,
@@ -133,7 +250,7 @@ impl Ingest {
             self.serve_connection(stream)?;
             served += 1;
         }
-        Ok(self.stats.clone())
+        Ok(self.stats())
     }
 
     /// Serve one connection until the sender closes it.
@@ -191,6 +308,13 @@ impl Ingest {
         if batch.is_empty() {
             return Ok(());
         }
+        let t0 = Instant::now();
+        let r = self.flush_inner(batch, acks);
+        self.stats.max_flush_ms = self.stats.max_flush_ms.max(t0.elapsed().as_millis() as u64);
+        r
+    }
+
+    fn flush_inner(&mut self, batch: &mut Vec<Frame>, acks: &mut impl Write) -> Result<(), Error> {
         let mut keep = Vec::with_capacity(batch.len());
         let mut durable: BTreeMap<u16, u64> = BTreeMap::new();
         for f in batch.drain(..) {
@@ -227,7 +351,9 @@ impl Ingest {
                 samples: f.samples.clone(),
             })
             .collect();
+        let t = Instant::now();
         self.store.put_samples(&blocks)?;
+        self.stats.put_samples_ms += t.elapsed().as_millis() as u64;
         self.stats.batches += 1;
         self.stats.frames += keep.len() as u64;
         self.stats.samples += keep.iter().map(|f| f.samples.len() as u64).sum::<u64>();
@@ -235,12 +361,10 @@ impl Ingest {
         // for the store; its data is safe either way.
         let entries: Vec<(u16, u64)> = durable.into_iter().collect();
         let _ = write_ack(acks, &entries).and_then(|()| acks.flush());
-        let windows: Vec<_> = keep.iter().flat_map(|f| self.windower.push(f)).collect();
-        self.stats.window_gaps = self.windower.gaps();
-        if !windows.is_empty() {
-            let rows = self.engine.compute(&windows)?;
-            self.store.put_features(&rows)?;
-            self.stats.feature_rows += rows.len() as u64;
+        if let Some(w) = &self.features {
+            if w.tx.send(keep).is_err() {
+                // The feature thread stopped on an error; close() reports it.
+            }
         }
         Ok(())
     }

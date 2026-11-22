@@ -26,7 +26,8 @@ fn realtime_ingest_stores_everything_and_features_equal_reference() {
     let cfg = IngestConfig::new(&dir, layout.clone());
     let server = std::thread::spawn(move || {
         let mut ing = Ingest::open(cfg).unwrap();
-        ing.serve(&listener, Some(1)).unwrap()
+        ing.serve(&listener, Some(1)).unwrap();
+        ing.close().unwrap()
     });
     let ticks = ticks_for_seconds(2);
     let frames: Vec<_> = Synth::new(&layout, 11, Some(ticks)).collect();

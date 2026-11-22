@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! diagsteno synth  --out FILE [--seed N] [--seconds S]
-//! diagsteno ingest --store DIR [--listen ADDR] [--connections K] [--batch-ms MS]
+//! diagsteno ingest --store DIR [--listen ADDR] [--connections K] [--batch-ms MS] [--queue FRAMES]
 //! diagsteno send   --to ADDR (--dataset FILE | [--seed N] [--seconds S]) [--realtime]
 //! diagsteno replay --dataset FILE
 //! diagsteno check-store --store DIR
@@ -92,18 +92,22 @@ fn ingest(a: &Args) -> Result<(), Error> {
     println!("listening on {}", listener.local_addr()?);
     let mut cfg = IngestConfig::new(a.req("store")?, default_layout());
     cfg.batch = Duration::from_millis(a.num("batch-ms", 100u64)?);
+    cfg.queue = a.num("queue", cfg.queue)?;
     let connections = match a.get("connections") {
         Some(v) => Some(v.parse::<usize>()?),
         None => None,
     };
     let mut ing = Ingest::open(cfg)?;
-    let s = ing.serve(&listener, connections)?;
+    ing.serve(&listener, connections)?;
+    let s = ing.close()?;
     println!(
         "{}",
         json!({"frames": s.frames, "samples": s.samples, "missing_frames": s.missing_frames,
                "missing_samples": s.missing_samples, "duplicate_frames": s.duplicate_frames,
                "unknown_channel_frames": s.unknown_channel_frames, "feature_rows": s.feature_rows,
-               "window_gaps": s.window_gaps, "batches": s.batches})
+               "window_gaps": s.window_gaps, "batches": s.batches,
+               "put_samples_ms": s.put_samples_ms, "features_ms": s.features_ms,
+               "put_features_ms": s.put_features_ms, "max_flush_ms": s.max_flush_ms})
     );
     Ok(())
 }
@@ -126,8 +130,9 @@ fn send(a: &Args) -> Result<(), Error> {
         "{}",
         json!({"frames": r.frames, "samples": r.samples, "ticks": r.ticks,
                "late_ticks": r.late_ticks, "realtime": realtime,
-               "elapsed_s": r.elapsed.as_secs_f64(),
-               "samples_per_second": r.samples as f64 / r.elapsed.as_secs_f64(),
+               "send_s": r.send_elapsed.as_secs_f64(),
+               "sent_samples_per_second": r.samples as f64 / r.send_elapsed.as_secs_f64(),
+               "until_last_ack_s": r.elapsed.as_secs_f64(),
                "all_frames_acked": acked_all, "error": r.error,
                "ack_delay_us": {"p50": r.ack_delay_percentile(50.0), "p99": r.ack_delay_percentile(99.0),
                                 "max": r.ack_delay_percentile(100.0)}})

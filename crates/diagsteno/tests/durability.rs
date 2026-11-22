@@ -6,7 +6,9 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::time::Duration;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use diagsteno::config::default_layout;
 use diagsteno::sender;
@@ -25,6 +27,8 @@ fn start_ingest(store: &Path, batch_ms: u32) -> (Child, String) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_diagsteno"))
         .args(["ingest", "--listen", "127.0.0.1:0", "--connections", "1"])
         .args(["--batch-ms", &batch_ms.to_string()])
+        // A small queue keeps the sender mid-stream when the kill lands.
+        .args(["--queue", "1024"])
         .arg("--store")
         .arg(store)
         .stdout(Stdio::piped())
@@ -50,20 +54,33 @@ fn killed_ingest_loses_no_acknowledged_frame() {
     let frames: Vec<_> = Synth::new(&layout, 5, Some(ticks_for_seconds(20))).collect();
 
     let (mut child, addr) = start_ingest(&dir, 20);
+    let progress = Arc::new(AtomicU64::new(0));
     let send = {
         let frames = frames.clone();
         let n = layout.len();
-        std::thread::spawn(move || sender::send(addr, frames, n, false).unwrap())
+        let progress = Arc::clone(&progress);
+        std::thread::spawn(move || {
+            sender::send_observed(addr, frames, n, false, &progress).unwrap()
+        })
     };
-    std::thread::sleep(Duration::from_millis(1500));
+    // Kill once acknowledgements are flowing: at least 1 s of data (100
+    // ticks) acknowledged, out of 20 s sent.
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while progress.load(Ordering::Relaxed) < 100 {
+        assert!(
+            Instant::now() < deadline,
+            "no acknowledgements within 120 s"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
     child.kill().expect("kill ingest"); // SIGKILL on Unix, TerminateProcess on Windows
     let _ = child.wait();
     let report = send.join().unwrap();
-    assert!(report.error.is_some(), "the kill should cut the send short");
     let acked: BTreeMap<u16, u64> = report.acked.iter().map(|(&c, &s)| (c, s)).collect();
+    let last_tick = ticks_for_seconds(20) - 1;
     assert!(
-        !acked.is_empty(),
-        "nothing was acknowledged before the kill"
+        acked.values().any(|&s| s < last_tick),
+        "the kill should land before everything is acknowledged"
     );
 
     // Every acknowledged frame is in the store, intact, after a restart.

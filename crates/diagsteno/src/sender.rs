@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::io::{self, BufWriter, Write};
 use std::net::{Shutdown, TcpStream, ToSocketAddrs};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -30,6 +31,8 @@ pub struct SendReport {
     /// Acknowledgement delay per acknowledged tick: from sending the tick to
     /// receiving its acknowledgement (in microseconds), sorted.
     pub ack_delay_us: Vec<u64>,
+    /// Wall-clock time spent writing frames.
+    pub send_elapsed: Duration,
     /// Wall-clock time of the send, until the last acknowledgement.
     pub elapsed: Duration,
     /// Why the send stopped early, if it did (for example, the ingest
@@ -67,6 +70,24 @@ pub fn send(
     per_tick: usize,
     realtime: bool,
 ) -> io::Result<SendReport> {
+    send_observed(
+        addr,
+        frames,
+        per_tick,
+        realtime,
+        &Arc::new(AtomicU64::new(0)),
+    )
+}
+
+/// [`send`], also counting acknowledged ticks into `acked_ticks` as
+/// acknowledgements arrive, so another thread can watch progress.
+pub fn send_observed(
+    addr: impl ToSocketAddrs,
+    frames: impl IntoIterator<Item = Frame>,
+    per_tick: usize,
+    realtime: bool,
+    acked_ticks: &Arc<AtomicU64>,
+) -> io::Result<SendReport> {
     let stream = TcpStream::connect(addr)?;
     stream.set_nodelay(true)?;
     let tick_sent: Arc<Mutex<Vec<Instant>>> = Arc::new(Mutex::new(Vec::new()));
@@ -75,6 +96,7 @@ pub fn send(
         let mut r = io::BufReader::new(stream.try_clone()?);
         let tick_sent = Arc::clone(&tick_sent);
         let state = Arc::clone(&state);
+        let progress = Arc::clone(acked_ticks);
         std::thread::spawn(move || -> io::Result<()> {
             while let Some(entries) = read_ack(&mut r)? {
                 let now = Instant::now();
@@ -90,6 +112,7 @@ pub fn send(
                         ticks.extend(from..=seq);
                     }
                 }
+                progress.fetch_add(ticks.len() as u64, Ordering::Relaxed);
                 for t in ticks {
                     if let Some(s) = sent.get(t as usize) {
                         st.delays.push(now.duration_since(*s).as_micros() as u64);
@@ -111,6 +134,7 @@ pub fn send(
         &mut report,
         start,
     );
+    report.send_elapsed = start.elapsed();
     let _ = stream.shutdown(Shutdown::Write);
     let ack_result = reader.join();
     report.elapsed = start.elapsed();
