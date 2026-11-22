@@ -126,11 +126,17 @@ const SAMPLES: &str = "samples";
 const FEATURES: &str = "features";
 const TMP: &str = "tmp";
 
-/// A store rooted at one directory. One writer at a time.
+/// A store rooted at one directory.
+///
+/// Each table has its own file sequence, so the samples table and the
+/// features table can be written from different threads: open the store
+/// once, then hand a [`Store::table_writer`] for one table to another
+/// thread. Each table must have only one writer at a time.
 #[derive(Debug)]
 pub struct Store {
     root: PathBuf,
-    next_seq: u64,
+    next_samples: u64,
+    next_features: u64,
 }
 
 impl Store {
@@ -147,13 +153,25 @@ impl Store {
             let p = io(&tmp, e)?.path();
             io(&p, fs::remove_file(&p))?;
         }
-        let mut next_seq = 0;
-        for table in [SAMPLES, FEATURES] {
-            for seq in file_seqs(&root.join(table))? {
-                next_seq = next_seq.max(seq + 1);
-            }
+        let next =
+            |t: &str| -> Result<u64> { Ok(file_seqs(&root.join(t))?.last().map_or(0, |s| s + 1)) };
+        Ok(Store {
+            next_samples: next(SAMPLES)?,
+            next_features: next(FEATURES)?,
+            root,
+        })
+    }
+
+    /// A second handle on the same store for writing from another thread.
+    /// Use it for one table only, and do not write that table through
+    /// `self` meanwhile. It does not clean temporary files (only
+    /// [`Store::open`] does).
+    pub fn table_writer(&self) -> Store {
+        Store {
+            root: self.root.clone(),
+            next_samples: self.next_samples,
+            next_features: self.next_features,
         }
-        Ok(Store { root, next_seq })
     }
 
     /// The store's root directory.
@@ -180,8 +198,15 @@ impl Store {
     }
 
     fn put(&mut self, table: &str, batch: &RecordBatch) -> Result<()> {
-        let seq = self.next_seq;
-        let tmp = self.root.join(TMP).join(format!("{seq:020}.parquet.tmp"));
+        let seq = if table == SAMPLES {
+            self.next_samples
+        } else {
+            self.next_features
+        };
+        let tmp = self
+            .root
+            .join(TMP)
+            .join(format!("{table}-{seq:020}.parquet.tmp"));
         let dest_dir = self.root.join(table);
         let dest = dest_dir.join(format!("{seq:020}.parquet"));
         let mut file = io(&tmp, File::create(&tmp))?;
@@ -195,7 +220,11 @@ impl Store {
         drop(file);
         io(&dest, fs::rename(&tmp, &dest))?;
         io(&dest_dir, platform::sync_dir(&dest_dir))?;
-        self.next_seq = seq + 1;
+        if table == SAMPLES {
+            self.next_samples = seq + 1;
+        } else {
+            self.next_features = seq + 1;
+        }
         Ok(())
     }
 
@@ -460,6 +489,40 @@ mod tests {
     }
 
     #[test]
+    fn tables_can_be_written_from_two_threads() {
+        let dir = tmpdir("threads");
+        let mut s = Store::open(&dir).unwrap();
+        let mut f = s.table_writer();
+        let t = std::thread::spawn(move || {
+            for w in 0..20 {
+                let row = FeatureRow {
+                    channel: 1,
+                    kind: "accel".into(),
+                    window: w,
+                    first_sample: w * 4096,
+                    sample_rate: 25_600,
+                    n: 4096,
+                    mean: 0.0,
+                    rms: 1.0,
+                    min: -1,
+                    max: 1,
+                    band_edges_hz: vec![10.0, 100.0],
+                    band_energy: vec![2.0],
+                };
+                f.put_features(&[row]).unwrap();
+            }
+        });
+        for i in 0..20 {
+            s.put_samples(&[block(1, i)]).unwrap();
+        }
+        t.join().unwrap();
+        let s = Store::open(&dir).unwrap();
+        assert_eq!(s.read_samples().unwrap().len(), 20);
+        assert_eq!(s.read_features().unwrap().len(), 20);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn open_removes_partial_files_and_continues_numbering() {
         let dir = tmpdir("partial");
         let mut s = Store::open(&dir).unwrap();
@@ -467,7 +530,8 @@ mod tests {
         drop(s);
         // A crash mid-write leaves only a temporary file.
         fs::write(
-            dir.join(TMP).join("00000000000000000001.parquet.tmp"),
+            dir.join(TMP)
+                .join("samples-00000000000000000001.parquet.tmp"),
             b"partial",
         )
         .unwrap();
