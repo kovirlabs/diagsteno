@@ -5,8 +5,14 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
+  # diagsteno depends on bytelanes by path (../bytelanes). Until the M7 FFT
+  # contract change is merged into bytelanes main, build against its branch.
+  BYTELANES_REF: m7-fft
 
 jobs:
   check:
@@ -17,11 +23,29 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: diagsteno
+          persist-credentials: false
+      # The sibling repos are private: SIBLING_REPOS_TOKEN should be a
+      # fine-grained token with read-only Contents access to
+      # kovirlabs/bytelanes only. It is not left on disk after checkout.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: kovirlabs/bytelanes
+          ref: ${{ env.BYTELANES_REF }}
+          path: bytelanes
+          token: ${{ secrets.SIBLING_REPOS_TOKEN }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: diagsteno
       - run: cargo fmt --all --check
+        working-directory: diagsteno
       - run: cargo clippy --workspace --all-targets -- -D warnings
+        working-directory: diagsteno
       - run: cargo test --workspace
+        working-directory: diagsteno
