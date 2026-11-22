@@ -1,0 +1,14 @@
+/home/evangress/dev/diagsteno/experiments/socket_locality/target/release/deps/serde-eb088d978f8074a1.d: /home/evangress/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /home/evangress/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /home/evangress/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /home/evangress/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /home/evangress/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /home/evangress/dev/diagsteno/experiments/socket_locality/target/release/build/serde-147353a390178aed/out/private.rs
+
+/home/evangress/dev/diagsteno/experiments/socket_locality/target/release/deps/libserde-eb088d978f8074a1.rlib: /home/evangress/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /home/evangress/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /home/evangress/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /home/evangress/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /home/evangress/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /home/evangress/dev/diagsteno/experiments/socket_locality/target/release/build/serde-147353a390178aed/out/private.rs
+
+/home/evangress/dev/diagsteno/experiments/socket_locality/target/release/deps/libserde-eb088d978f8074a1.rmeta: /home/evangress/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /home/evangress/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /home/evangress/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /home/evangress/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /home/evangress/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /home/evangress/dev/diagsteno/experiments/socket_locality/target/release/build/serde-147353a390178aed/out/private.rs
+
+/home/evangress/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs:
+/home/evangress/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs:
+/home/evangress/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs:
+/home/evangress/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs:
+/home/evangress/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs:
+/home/evangress/dev/diagsteno/experiments/socket_locality/target/release/build/serde-147353a390178aed/out/private.rs:
+
+# env-dep:OUT_DIR=/home/evangress/dev/diagsteno/experiments/socket_locality/target/release/build/serde-147353a390178aed/out
