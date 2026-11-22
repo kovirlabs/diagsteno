@@ -7,6 +7,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # diagsteno depends on bytelanes by path (../bytelanes). Until the M7 FFT
+  # contract change is merged into bytelanes main, build against its branch.
+  BYTELANES_REF: m7-fft
 
 jobs:
   check:
@@ -18,10 +21,25 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: diagsteno
+      # The sibling repos are private: SIBLING_REPOS_TOKEN must be a token
+      # with read access to kovirlabs/bytelanes.
+      - uses: actions/checkout@v4
+        with:
+          repository: kovirlabs/bytelanes
+          ref: ${{ env.BYTELANES_REF }}
+          path: bytelanes
+          token: ${{ secrets.SIBLING_REPOS_TOKEN }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: diagsteno
       - run: cargo fmt --all --check
+        working-directory: diagsteno
       - run: cargo clippy --workspace --all-targets -- -D warnings
+        working-directory: diagsteno
       - run: cargo test --workspace
+        working-directory: diagsteno
