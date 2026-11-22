@@ -128,9 +128,30 @@ cargo test --workspace
 Agents prepare releases (changelog, README, version bump in a pull request).
 Only Evan merges, tags and publishes.
 
+## Decided
+
+- Synthetic data (M7, 2026-11-22): 64 channels, 32 accelerometers at
+  25.6 kHz (16-bit) and 32 strain gauges at 1 kHz (24-bit);
+  `config::default_layout`.
+- Storage (M7, 2026-11-22): Parquet, one fsynced file per batch;
+  `diagsteno-store`.
+- FFT (M7, 2026-11-22): the fixed-point `Op::Fft` in `bytelanes`, so GPU
+  output matches the CPU reference byte for byte.
+
+## Commands
+
+```
+cargo run --release -p diagsteno -- synth --out ds.bin --seed 2026 --seconds 60
+cargo run --release -p diagsteno -- replay --dataset ds.bin
+cargo run --release -p diagsteno -- ingest --store store --listen 127.0.0.1:7600 --connections 1
+cargo run --release -p diagsteno -- send --to 127.0.0.1:7600 --seed 2026 --seconds 60 --realtime
+cargo run --release -p diagsteno -- check-store --store store
+```
+
+On the Dell guest, `/tmp` does not allow running executables: run tests with
+`TMPDIR=~/.cache/miri-tmp` or doctests and spawned-binary tests fail.
+
 ## Open decisions (TBD)
 
 - GitHub owner for the four repos
-- Target channel count, sample rate and sensor types for the synthetic data (M7)
-- Storage format (suggested: Parquet) (M7)
 - Which time-series database to export to (M8)
