@@ -11,6 +11,9 @@
 #![forbid(unsafe_code)]
 
 pub mod config;
+pub mod dataset;
 pub mod features;
 pub mod frame;
+pub mod ingest;
+pub mod sender;
 pub mod synth;

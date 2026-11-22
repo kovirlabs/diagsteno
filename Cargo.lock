@@ -290,6 +290,7 @@ dependencies = [
  "bytelanes",
  "crc32c",
  "diagsteno-store",
+ "serde_json",
 ]
 
 [[package]]
