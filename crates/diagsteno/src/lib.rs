@@ -11,5 +11,6 @@
 #![forbid(unsafe_code)]
 
 pub mod config;
+pub mod features;
 pub mod frame;
 pub mod synth;
