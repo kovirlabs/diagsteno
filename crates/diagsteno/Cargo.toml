@@ -9,3 +9,8 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+bytelanes = { version = "0.0.1", path = "../../../bytelanes/crates/bytelanes" }
+crc32c = "0.6.9"
+diagsteno-store = { version = "0.0.0", path = "../diagsteno-store" }
